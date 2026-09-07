@@ -1,0 +1,133 @@
+name: RAMO Smart Money Base 24x7
+
+on:
+  schedule:
+    # Four long windows/day. Minute 17 avoids top-of-hour scheduler congestion.
+    - cron: '17 0,6,12,18 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: ramo-smart-money-base-24x7
+  cancel-in-progress: false
+
+jobs:
+  smart-money:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    env:
+      BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      SMART_MONEY_PACKAGE_KEY: ${{ secrets.SMART_MONEY_PACKAGE_KEY }}
+
+      # Persistent DB lives inside the Actions cache path.
+      SMART_MONEY_DB: data/smart_money.db
+
+      # Optional overrides. Empty/missing secrets keep the verified built-in defaults.
+      DEX_UNISWAP_V2_ROUTER: ${{ secrets.DEX_UNISWAP_V2_ROUTER }}
+      DEX_UNISWAP_V3_ROUTER: ${{ secrets.DEX_UNISWAP_V3_ROUTER }}
+      DEX_UNISWAP_UNIVERSAL_ROUTER: ${{ secrets.DEX_UNISWAP_UNIVERSAL_ROUTER }}
+      DEX_UNISWAP_UNIVERSAL_ROUTER_2_1_1: ${{ secrets.DEX_UNISWAP_UNIVERSAL_ROUTER_2_1_1 }}
+      DEX_AERODROME_ROUTER: ${{ secrets.DEX_AERODROME_ROUTER }}
+      DEX_AERODROME_UNIVERSAL_ROUTER: ${{ secrets.DEX_AERODROME_UNIVERSAL_ROUTER }}
+      DEX_AERODROME_SLIPSTREAM_ROUTER: ${{ secrets.DEX_AERODROME_SLIPSTREAM_ROUTER }}
+      DEX_BASESWAP_ROUTER: ${{ secrets.DEX_BASESWAP_ROUTER }}
+
+      # Periodic visibility into whether discovery is actually finding DEX activity.
+      DISCOVERY_PROGRESS_BLOCKS: '10000'
+
+      # Conservative RPC settings for graceful GitHub shutdown/retry behavior.
+      RPC_TIMEOUT: '15'
+      RPC_MAX_RETRIES: '6'
+      RPC_BACKOFF_BASE: '1.0'
+      RPC_429_BACKOFF_BASE: '4.0'
+      RPC_BACKOFF_MAX: '120'
+      RPC_MAX_REQUESTS_PER_SECOND: '5'
+      TOKEN_METADATA_FAILURE_TTL: '21600'
+      VERIFY_EOA_CODE: '0'
+      LOG_LEVEL: INFO
+
+    steps:
+      - name: Checkout protected runner wrapper
+        uses: actions/checkout@v4
+
+      - name: Verify required secrets exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SMART_MONEY_PACKAGE_KEY" || { echo 'Missing SMART_MONEY_PACKAGE_KEY'; exit 1; }
+          test -n "$BASE_RPC_URL" || { echo 'Missing BASE_RPC_URL'; exit 1; }
+          test -n "$TELEGRAM_BOT_TOKEN" || { echo 'Missing TELEGRAM_BOT_TOKEN'; exit 1; }
+          test -n "$TELEGRAM_CHAT_ID" || { echo 'Missing TELEGRAM_CHAT_ID'; exit 1; }
+
+      - name: Decrypt protected Smart Money payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p app
+          printf '%s' "$SMART_MONEY_PACKAGE_KEY" | \
+            openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 \
+              -pass stdin -in smart_money_payload.enc -out smart_money_payload.tar.gz
+          tar -xzf smart_money_payload.tar.gz -C app
+          rm -f smart_money_payload.tar.gz
+          mkdir -p app/data
+
+      - name: Restore persistent Smart Money state
+        id: restore-state
+        uses: actions/cache/restore@v4
+        with:
+          path: app/data
+          key: ramo-smart-money-state-${{ github.run_id }}
+          restore-keys: |
+            ramo-smart-money-state-
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: app/requirements.txt
+
+      - name: Install dependencies
+        shell: bash
+        run: python -m pip install --disable-pip-version-check -r app/requirements.txt
+
+      - name: Run Base Smart Money window
+        shell: bash
+        working-directory: app
+        # Stops itself before GitHub's hard timeout so SQLite/checkpoints close cleanly.
+        run: python -u main.py --runtime-minutes 340
+
+      - name: Save persistent Smart Money state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: app/data
+          key: ramo-smart-money-state-${{ github.run_id }}
+
+      - name: Prune old Smart Money state caches
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t OLD_IDS < <(
+            gh cache list \
+              --key ramo-smart-money-state- \
+              --limit 100 \
+              --sort created_at \
+              --order desc \
+              --json id \
+              --jq '.[3:] | .[].id'
+          )
+          if [ "${#OLD_IDS[@]}" -gt 0 ]; then
+            for id in "${OLD_IDS[@]}"; do
+              [ -n "$id" ] && gh cache delete "$id"
+            done
+          fi
+          echo "Keeping the 3 newest Smart Money state caches."
