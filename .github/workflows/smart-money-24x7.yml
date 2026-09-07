@@ -36,7 +36,7 @@ jobs:
       DEX_AERODROME_SLIPSTREAM_ROUTER: ${{ secrets.DEX_AERODROME_SLIPSTREAM_ROUTER }}
       DEX_BASESWAP_ROUTER: ${{ secrets.DEX_BASESWAP_ROUTER }}
 
-      # V1.4: standard JSON-RPC full-block batching. No eth_getLogs dependency.
+      # V1.5: standard JSON-RPC full-block batching. No eth_getLogs dependency.
       DISCOVERY_PROVIDER: batch_blocks
       DISCOVERY_BATCH_BLOCKS: '500'
       DISCOVERY_PROGRESS_BLOCKS: '10000'
