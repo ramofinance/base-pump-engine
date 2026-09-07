@@ -1,103 +1,81 @@
-# RAMO Smart Money Base v1.3.0
+# RAMO Smart Money Base v1.4
 
-Base Mainnet-only Smart Money discovery + analysis + live monitoring agent.
+A Base Mainnet Smart-Money discovery and monitoring agent designed for GitHub Actions.
 
-## What changed in v1.3
+## What changed in v1.4
 
-V1.3 replaces the slow one-block-at-a-time historical path with an **event-first batch discovery path** while preserving the existing SQLite database and per-DEX checkpoints.
+V1.4 removes `eth_getLogs` from the default historical path. V1.3 proved that some hosted Base RPC plans reject broad Swap-log queries at the HTTP layer, even when the requested block range is reduced.
 
-Historical discovery now:
+The new default is **Batched Full-Block Discovery**:
 
-1. calls `eth_getLogs` for known V2/V3/Solidly/v4 `Swap` event signatures over a block range;
-2. automatically splits the range if the RPC provider says the log result is too large;
-3. deduplicates transaction hashes;
-4. batch-fetches transaction envelopes;
-5. keeps only transactions whose top-level `to` is one of the configured Base DEX entrypoints;
-6. batch-fetches receipts only for those router transactions;
-7. batch-fetches the needed block headers for timestamps;
-8. sends the proven transaction + receipt through the same conservative wallet-flow detector used before.
+1. Fetch Base blocks with full transaction envelopes using JSON-RPC batches.
+2. Keep only transactions whose `to` address is one of the configured DEX router entrypoints.
+3. Fetch receipts only for those router transactions, also in JSON-RPC batches.
+4. Run the same conservative wallet-flow BUY/SELL detector.
+5. Save a checkpoint only after the whole block window is completely processed.
 
-This is materially faster on GitHub Actions because it avoids downloading every full Base block and avoids one HTTP request per receipt/header.
+This keeps the correctness of v1.2 while avoiding one HTTP request per block.
 
-## Why this does not weaken BUY/SELL quality
+## Important reliability behavior
 
-The V1.2 detector only classified a transaction as BUY/SELL when a known pool `Swap` event was present. Transactions without a recognized Swap event could only become `UNKNOWN` and were excluded from Smart Money scoring and alerts.
+- No broad `eth_getLogs` query is required.
+- If the RPC rejects a JSON-RPC batch, the batch automatically splits into smaller batches.
+- If one block is missing from a batch response, that block is retried through scalar RPC.
+- If one receipt is missing from a batch response, that receipt is retried through scalar RPC.
+- If the scalar fallback also fails, discovery stops and **does not advance the checkpoint past incomplete data**.
+- 429 responses use exponential backoff.
+- SQLite state is restored/saved through GitHub Actions cache.
+- Existing v1/v1.1/v1.2/v1.3 database state remains compatible.
 
-Therefore the V1.3 event-first historical provider skips work that was not score-eligible under the existing detector rules. The strict wallet token-flow detector remains unchanged.
-
-## Checkpoint compatibility
-
-V1.3 uses the same SQLite schema and the same keys:
-
-- `discovery_last_block:<dex>`
-- `discovery_last_block`
-- initial discovery anchor
-- token metadata cache
-- wallets/trades/positions/alerts
-
-A V1.2 GitHub Actions cache can be restored directly. Completed V1.2 progress is not intentionally reset.
-
-## Fast discovery settings
-
-The GitHub workflow defaults are:
+## Expected startup log
 
 ```text
-DISCOVERY_PROVIDER=event_logs
-DISCOVERY_EVENT_BATCH_BLOCKS=2000
-DISCOVERY_EVENT_MIN_BLOCKS=25
-RPC_BATCH_SIZE=25
-RPC_BATCH_HTTP_REQUESTS_PER_SECOND=1.5
-RPC_MAX_REQUESTS_PER_SECOND=5
-```
-
-If `eth_getLogs` returns too many results, the range is split automatically. If a minimum-sized range still cannot be queried, only that slice falls back to full-block scanning instead of crashing the whole run.
-
-If the provider returns HTTP 429, the existing exponential backoff remains active.
-
-## Expected startup lines
-
-```text
-RAMO Smart Money Base v1.3.0 starting
+RAMO Smart Money Base v1.4.0 starting
 Connected to Base (chain_id=8453)
-RPC pacing enabled: scalar max 5.00 req/s; batch max 1.50 HTTP req/s; batch_size=25
-Historical provider: FAST EVENT-LOG discovery (eth_getLogs + batch tx/receipt/header fetch)
-Scanning Base historical blocks ...
-Fast historical event range ...
-FAST EVENT BATCH ... | swap_logs=... unique_swap_txs=... router_txs=... successful=...
+Historical provider: BATCHED FULL-BLOCK discovery (no eth_getLogs)
+BATCH BLOCK RANGE ...
+BATCH BLOCK DONE ...
 ```
 
-## Progress telemetry
-
-Every 10,000 completed historical blocks the agent reports:
+Every 10,000 completed blocks the workflow prints:
 
 ```text
-DISCOVERY PROGRESS | run_blocks=10000 swap_event_logs=... unique_swap_txs=... router_txs=... successful_router_txs=... run_BUY=... run_SELL=... run_UNKNOWN=... DB_trades=... candidates=...
-FAST DISCOVERY STATS | event_windows=... splits=... fallback_blocks=... inserted=... duplicates=...
+DISCOVERY PROGRESS | run_blocks=... router_txs=... successful_router_txs=... run_BUY=... run_SELL=... run_UNKNOWN=... candidates=...
+BATCH DISCOVERY STATS | windows=... block_misses=... scalar_block_fallbacks=... scalar_receipt_fallbacks=...
 DEX ROUTER CALLS | ...
 ```
 
-`UNKNOWN` is still deliberately excluded from Smart Money scoring and alerts.
+## Required GitHub Secrets
 
-## Active Base DEX entrypoints
+Keep the same existing secrets:
 
-Built-in defaults remain enabled for:
+- `SMART_MONEY_PACKAGE_KEY`
+- `BASE_RPC_URL`
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
 
-- Uniswap V2 Router02
-- Uniswap V3 SwapRouter02
-- Uniswap Universal Router
-- Uniswap Universal Router 2.1.1
-- Aerodrome classic Router
-- Aerodrome Universal Router
-- Aerodrome Slipstream SwapRouter
+No secret needs to be changed when upgrading from v1.3.
 
-BaseSwap remains operator-supplied through `DEX_BASESWAP_ROUTER`.
+## Upgrade from v1.3
 
-## Smart Money analysis
+Replace only:
 
-After the first historical catch-up finishes, candidate wallets are analyzed using FIFO realized PnL, ROI, win rate, profit factor, trade count, consistency, drawdown and lucky-wallet concentration penalties. Only wallets satisfying configured minimums become `is_smart_money=1`.
+- `smart_money_payload.enc`
+- `README.md`
+- `.github/workflows/smart-money-24x7.yml`
 
-The real-time Base monitor and Telegram 3-wallet cluster alerts remain separate from historical discovery.
+Then run the workflow manually. The previous SQLite cache/checkpoints are reused.
 
-## RPC limitation
+## Smart-Money rules
 
-This remains an RPC-only architecture. `eth_getLogs` is much more efficient than full block crawling, but a provider can still impose response-size, compute-unit or rate limits. V1.3 adapts log ranges and batch sizes conservatively. At larger scale, the `HistoricalProvider` interface can still be replaced by an indexer without changing scoring, database, FIFO, monitoring or alerts.
+The scoring and alert rules are unchanged from the conservative design:
+
+- Unknown/ambiguous swaps are excluded from scoring and alerts.
+- A wallet must have enough evaluated trades and meet ROI, win-rate and profit-factor thresholds.
+- FIFO is used for realized PnL.
+- One lucky trade is penalized in the Smart Money score.
+- Three distinct Smart Money wallets buying the same token inside the configured alert window can trigger Telegram after quality/risk checks.
+
+## Historical RPC limitation
+
+This remains RPC-only discovery, not an indexer. A 30-day Base backfill is still substantial. V1.4 is meant to be robust on ordinary hosted RPC while using batching to reduce wall-clock latency. At much larger scale, a dedicated indexer remains the appropriate historical provider.
