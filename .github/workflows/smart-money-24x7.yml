@@ -27,11 +27,18 @@ jobs:
       # Persistent DB lives inside the Actions cache path.
       SMART_MONEY_DB: data/smart_money.db
 
-      # Optional DEX routers. Aerodrome has a built-in verified default.
+      # Optional overrides. Empty/missing secrets keep the verified built-in defaults.
       DEX_UNISWAP_V2_ROUTER: ${{ secrets.DEX_UNISWAP_V2_ROUTER }}
       DEX_UNISWAP_V3_ROUTER: ${{ secrets.DEX_UNISWAP_V3_ROUTER }}
       DEX_UNISWAP_UNIVERSAL_ROUTER: ${{ secrets.DEX_UNISWAP_UNIVERSAL_ROUTER }}
+      DEX_UNISWAP_UNIVERSAL_ROUTER_2_1_1: ${{ secrets.DEX_UNISWAP_UNIVERSAL_ROUTER_2_1_1 }}
+      DEX_AERODROME_ROUTER: ${{ secrets.DEX_AERODROME_ROUTER }}
+      DEX_AERODROME_UNIVERSAL_ROUTER: ${{ secrets.DEX_AERODROME_UNIVERSAL_ROUTER }}
+      DEX_AERODROME_SLIPSTREAM_ROUTER: ${{ secrets.DEX_AERODROME_SLIPSTREAM_ROUTER }}
       DEX_BASESWAP_ROUTER: ${{ secrets.DEX_BASESWAP_ROUTER }}
+
+      # Periodic visibility into whether discovery is actually finding DEX activity.
+      DISCOVERY_PROGRESS_BLOCKS: '10000'
 
       # Conservative RPC settings for graceful GitHub shutdown/retry behavior.
       RPC_TIMEOUT: '15'
