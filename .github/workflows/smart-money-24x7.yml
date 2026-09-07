@@ -24,10 +24,9 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       SMART_MONEY_PACKAGE_KEY: ${{ secrets.SMART_MONEY_PACKAGE_KEY }}
 
-      # Persistent DB lives inside the Actions cache path.
       SMART_MONEY_DB: data/smart_money.db
 
-      # Optional overrides. Empty/missing secrets keep the verified built-in defaults.
+      # Optional router overrides. Empty/missing secrets keep built-in defaults.
       DEX_UNISWAP_V2_ROUTER: ${{ secrets.DEX_UNISWAP_V2_ROUTER }}
       DEX_UNISWAP_V3_ROUTER: ${{ secrets.DEX_UNISWAP_V3_ROUTER }}
       DEX_UNISWAP_UNIVERSAL_ROUTER: ${{ secrets.DEX_UNISWAP_UNIVERSAL_ROUTER }}
@@ -37,18 +36,16 @@ jobs:
       DEX_AERODROME_SLIPSTREAM_ROUTER: ${{ secrets.DEX_AERODROME_SLIPSTREAM_ROUTER }}
       DEX_BASESWAP_ROUTER: ${{ secrets.DEX_BASESWAP_ROUTER }}
 
-      # Periodic visibility into whether discovery is actually finding DEX activity.
+      # V1.4: standard JSON-RPC full-block batching. No eth_getLogs dependency.
+      DISCOVERY_PROVIDER: batch_blocks
+      DISCOVERY_BATCH_BLOCKS: '500'
       DISCOVERY_PROGRESS_BLOCKS: '10000'
+      RPC_BLOCK_BATCH_SIZE: '10'
+      RPC_BATCH_SIZE: '20'
+      RPC_BATCH_HTTP_REQUESTS_PER_SECOND: '0.75'
 
-      # V1.3 fast historical discovery.
-      DISCOVERY_PROVIDER: event_logs
-      DISCOVERY_EVENT_BATCH_BLOCKS: '2000'
-      DISCOVERY_EVENT_MIN_BLOCKS: '25'
-      RPC_BATCH_SIZE: '25'
-      RPC_BATCH_HTTP_REQUESTS_PER_SECOND: '1.5'
-
-      # Conservative RPC settings for graceful GitHub shutdown/retry behavior.
-      RPC_TIMEOUT: '15'
+      # Scalar calls remain conservatively paced. 429s back off exponentially.
+      RPC_TIMEOUT: '20'
       RPC_MAX_RETRIES: '6'
       RPC_BACKOFF_BASE: '1.0'
       RPC_429_BACKOFF_BASE: '4.0'
@@ -106,7 +103,6 @@ jobs:
       - name: Run Base Smart Money window
         shell: bash
         working-directory: app
-        # Stops itself before GitHub's hard timeout so SQLite/checkpoints close cleanly.
         run: python -u main.py --runtime-minutes 340
 
       - name: Save persistent Smart Money state
