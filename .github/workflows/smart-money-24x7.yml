@@ -36,7 +36,7 @@ jobs:
       DEX_AERODROME_SLIPSTREAM_ROUTER: ${{ secrets.DEX_AERODROME_SLIPSTREAM_ROUTER }}
       DEX_BASESWAP_ROUTER: ${{ secrets.DEX_BASESWAP_ROUTER }}
 
-      # V1.5: standard JSON-RPC full-block batching. No eth_getLogs dependency.
+      # V1.6: progressive live mode + standard JSON-RPC full-block batching. No eth_getLogs dependency.
       DISCOVERY_PROVIDER: batch_blocks
       DISCOVERY_BATCH_BLOCKS: '500'
       DISCOVERY_PROGRESS_BLOCKS: '10000'
@@ -53,6 +53,24 @@ jobs:
       RPC_MAX_REQUESTS_PER_SECOND: '5'
       TOKEN_METADATA_FAILURE_TTL: '21600'
       VERIFY_EOA_CODE: '0'
+      # Progressive early-signal mode. No new secrets are required.
+      PROGRESSIVE_REFRESH_INTERVAL: '300'
+      PROGRESSIVE_HOT_WARMUP_ENABLED: '1'
+      PROGRESSIVE_HOT_WARMUP_HOURS: '24'
+      PROVISIONAL_SMART_MONEY_MIN_TRADES: '35'
+      PROVISIONAL_SMART_MONEY_MIN_CLOSED_TRADES: '8'
+      PROVISIONAL_SMART_MONEY_MIN_ROI: '0.25'
+      PROVISIONAL_SMART_MONEY_MIN_WIN_RATE: '0.60'
+      PROVISIONAL_SMART_MONEY_MIN_PROFIT_FACTOR: '1.8'
+      PROVISIONAL_SMART_MONEY_MIN_SCORE: '78'
+      PROVISIONAL_SMART_MONEY_MAX_DRAWDOWN: '0.35'
+      PROVISIONAL_SMART_MONEY_MAX_LARGEST_TRADE_SHARE: '0.55'
+      PROVISIONAL_SMART_MONEY_MIN_CONSISTENCY: '0.45'
+      SMART_MONEY_MIN_CLOSED_TRADES: '5'
+      SMART_MONEY_MIN_SCORE: '68'
+      SMART_MONEY_MAX_DRAWDOWN: '0.50'
+      SMART_MONEY_MAX_LARGEST_TRADE_SHARE: '0.70'
+      MONITOR_HEARTBEAT_BLOCKS: '30'
       LOG_LEVEL: INFO
 
     steps:
@@ -116,21 +134,3 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -t OLD_IDS < <(
-            gh cache list \
-              --key ramo-smart-money-state- \
-              --limit 100 \
-              --sort created_at \
-              --order desc \
-              --json id \
-              --jq '.[3:] | .[].id'
-          )
-          if [ "${#OLD_IDS[@]}" -gt 0 ]; then
-            for id in "${OLD_IDS[@]}"; do
-              [ -n "$id" ] && gh cache delete "$id"
-            done
-          fi
-          echo "Keeping the 3 newest Smart Money state caches."
