@@ -1,81 +1,74 @@
-# RAMO Smart Money Base v1.4
+# RAMO Smart Money Base v1.5
 
-A Base Mainnet Smart-Money discovery and monitoring agent designed for GitHub Actions.
+Base Mainnet Smart-Money discovery and real-time monitoring for GitHub Actions.
 
-## What changed in v1.4
+## Why v1.5 exists
 
-V1.4 removes `eth_getLogs` from the default historical path. V1.3 proved that some hosted Base RPC plans reject broad Swap-log queries at the HTTP layer, even when the requested block range is reduced.
+The v1.4 batch transport itself worked correctly, but the restored SQLite state contained poisoned per-DEX checkpoints left by the failed v1.3 `eth_getLogs` path. That made v1.4 start close to the chain tip, scan only 489 blocks, and then analyze an incomplete historical database.
 
-The new default is **Batched Full-Block Discovery**:
+V1.5 fixes the checkpoint layer, not the trade database:
 
-1. Fetch Base blocks with full transaction envelopes using JSON-RPC batches.
-2. Keep only transactions whose `to` address is one of the configured DEX router entrypoints.
-3. Fetch receipts only for those router transactions, also in JSON-RPC batches.
-4. Run the same conservative wallet-flow BUY/SELL detector.
-5. Save a checkpoint only after the whole block window is completely processed.
+- Performs a one-time rollback of only the corrupted checkpoint state to the last confirmed safe floors.
+- Keeps all previously collected trades; duplicate replay is safe because trades use idempotent inserts.
+- Uses the reliable v1.4 **batched full-block** historical provider; no `eth_getLogs` dependency.
+- Marks historical discovery complete only if the final fully processed batch actually reaches the target block.
+- An exception, RPC failure, GitHub runtime stop, or generator early-return can no longer mark discovery complete from a `finally` block.
+- Per-DEX checkpoints are advanced only after a completely processed batch.
 
-This keeps the correctness of v1.2 while avoiding one HTTP request per block.
+## One-time safe checkpoint repair
 
-## Important reliability behavior
-
-- No broad `eth_getLogs` query is required.
-- If the RPC rejects a JSON-RPC batch, the batch automatically splits into smaller batches.
-- If one block is missing from a batch response, that block is retried through scalar RPC.
-- If one receipt is missing from a batch response, that receipt is retried through scalar RPC.
-- If the scalar fallback also fails, discovery stops and **does not advance the checkpoint past incomplete data**.
-- 429 responses use exponential backoff.
-- SQLite state is restored/saved through GitHub Actions cache.
-- Existing v1/v1.1/v1.2/v1.3 database state remains compatible.
-
-## Expected startup log
+On the first v1.5 run you should see a warning similar to:
 
 ```text
-RAMO Smart Money Base v1.4.0 starting
+V1.5 checkpoint integrity repair applied | ...
+V1.5 historical catch-up re-opened from safe common floor 49708292; classic Aerodrome remains eligible from 49812754
+```
+
+The common/new-router floor is `49,708,291`, the block immediately before the confirmed v1.3 start. Classic Aerodrome retains its separately confirmed safe floor `49,812,753`.
+
+Existing recent trades from v1.4 are not deleted. When backfill later reaches those blocks, `INSERT OR IGNORE` prevents duplicate rows.
+
+## Expected startup
+
+```text
+RAMO Smart Money Base v1.5.0 starting
 Connected to Base (chain_id=8453)
 Historical provider: BATCHED FULL-BLOCK discovery (no eth_getLogs)
+V1.5 checkpoint integrity repair applied | ...
+Scanning Base historical blocks 49708292 -> ...
 BATCH BLOCK RANGE ...
 BATCH BLOCK DONE ...
 ```
 
-Every 10,000 completed blocks the workflow prints:
+Historical completion is now logged only as:
 
 ```text
-DISCOVERY PROGRESS | run_blocks=... router_txs=... successful_router_txs=... run_BUY=... run_SELL=... run_UNKNOWN=... candidates=...
-BATCH DISCOVERY STATS | windows=... block_misses=... scalar_block_fallbacks=... scalar_receipt_fallbacks=...
-DEX ROUTER CALLS | ...
+Historical discovery VERIFIED complete through block ...
 ```
 
-## Required GitHub Secrets
+If a runner stops before that point, it prints:
 
-Keep the same existing secrets:
+```text
+Historical discovery NOT complete; last fully completed batch=... target=.... Checkpoints preserved for resume
+```
 
-- `SMART_MONEY_PACKAGE_KEY`
-- `BASE_RPC_URL`
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID`
+## GitHub upgrade
 
-No secret needs to be changed when upgrading from v1.3.
-
-## Upgrade from v1.3
-
-Replace only:
+Keep the same Repository Secrets. Replace only:
 
 - `smart_money_payload.enc`
 - `README.md`
 - `.github/workflows/smart-money-24x7.yml`
 
-Then run the workflow manually. The previous SQLite cache/checkpoints are reused.
+The current SQLite cache is intentionally reused.
 
-## Smart-Money rules
+## Smart Money thresholds
 
-The scoring and alert rules are unchanged from the conservative design:
+Default conservative thresholds remain:
 
-- Unknown/ambiguous swaps are excluded from scoring and alerts.
-- A wallet must have enough evaluated trades and meet ROI, win-rate and profit-factor thresholds.
-- FIFO is used for realized PnL.
-- One lucky trade is penalized in the Smart Money score.
-- Three distinct Smart Money wallets buying the same token inside the configured alert window can trigger Telegram after quality/risk checks.
+- minimum evaluated trades: 30
+- minimum ROI: 20%
+- minimum win rate: 55%
+- minimum profit factor: 1.5
 
-## Historical RPC limitation
-
-This remains RPC-only discovery, not an indexer. A 30-day Base backfill is still substantial. V1.4 is meant to be robust on ordinary hosted RPC while using batching to reduce wall-clock latency. At much larger scale, a dedicated indexer remains the appropriate historical provider.
+A high ROI on only 5–8 trades is therefore not enough to qualify a wallet as Smart Money. The database must finish historical catch-up before the Smart Money population is meaningful.
